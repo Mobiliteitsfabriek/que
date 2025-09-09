@@ -13,7 +13,7 @@ module Que
 
       def perform(*args)
         Que.internal_log(:active_job_perform, self) do
-          {args: args}
+          { args: args }
         end
 
         _run(
@@ -57,7 +57,7 @@ module Que
       # assumes that it can access a job's id via job.attrs["job_id"]. So,
       # oblige it.
       def attrs
-        {"job_id" => que_attrs[:id]}
+        { "job_id" => que_attrs[:id] }
       end
 
       def run(args)
@@ -90,8 +90,63 @@ module Que
   end
 end
 
-class ActiveJob::QueueAdapters::QueAdapter
-  class JobWrapper < Que::Job
-    prepend Que::ActiveJob::WrapperExtensions
+# This is the ActiveJob Que adapter for Rails 7.1+, given ActiveJob::QueueAdapters::QueAdapter has been removed from ActiveJob.
+# For backwards compatibility, the class name of ActiveJob::QueueAdapters::QueAdapter::JobWrapper must remain the same, given this string would be in old job records in the database
+#
+# Implementation of adapter is taken from rails 7.0.8
+if ActiveJob.gem_version >= Gem::Version.new('7.1')
+  module ActiveJob
+    module QueueAdapters
+      # Work around `autoload QueAdapter` being left over in ActiveJob after the adapter was removed
+      remove_const(:QueAdapter) if const_defined?(:QueAdapter)
+
+      class QueAdapter
+        def enqueue(job)
+          # :nodoc:
+          job_options = { priority: job.priority, queue: job.queue_name }
+          que_job = nil
+
+          if require_job_options_kwarg?
+            que_job = JobWrapper.enqueue job.serialize, job_options: job_options
+          else
+            que_job = JobWrapper.enqueue job.serialize, **job_options
+          end
+
+          job.provider_job_id = que_job.attrs["job_id"]
+          que_job
+        end
+
+        def enqueue_at(job, timestamp)
+          # :nodoc:
+          job_options = { priority: job.priority, queue: job.queue_name, run_at: Time.at(timestamp) }
+          que_job = nil
+
+          if require_job_options_kwarg?
+            que_job = JobWrapper.enqueue job.serialize, job_options: job_options
+          else
+            que_job = JobWrapper.enqueue job.serialize, **job_options
+          end
+
+          job.provider_job_id = que_job.attrs["job_id"]
+          que_job
+        end
+
+        private
+
+        def require_job_options_kwarg?
+          @require_job_options_kwarg ||=
+            JobWrapper.method(:enqueue).parameters.any? { |ptype, pname| ptype == :key && pname == :job_options }
+        end
+
+        class JobWrapper < Que::Job # :nodoc:
+          prepend Que::ActiveJob::WrapperExtensions
+
+          def run(job_data)
+            Base.execute job_data
+          end
+        end
+      end
+    end
   end
 end
+
