@@ -223,7 +223,7 @@ OUTPUT
           begin
             Que::Locker.new(options)
           rescue => e
-            output.puts(e.message)
+            output.puts("Locker failed to start: #{e.message}")
             return 1
           end
 
